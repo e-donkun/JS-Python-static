@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<!--
+  JS-Python Editor 静的版（PHPサーバ不要。保存はブラウザのlocalStorageだけ。認証なし）
+
+  このファイルは tools/build_static.py が static-src/index.template.html から自動生成したものです。
+  直接編集しないでください（編集する場合は、動的版 index.php の共通部分か static-src/ を直す）。
+  動的版（index.php）ベース: Ver.0.5.0048
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JS-Python Editor（静的版） | 情報Ⅰ Python</title>
+
+  <script>
+  // GitHub Pages等ではCOOP/COEPヘッダを設定できないため、Service Workerでヘッダを付けて
+  // SharedArrayBuffer（input()を本当に一時停止させるのに必要）を有効にする（詳細は coi-serviceworker.js）。
+  // 初回はWorkerが有効になった後に一度だけ再読み込みする（無限ループしないようsessionStorageで1回に制限）。
+  (function () {
+    if (window.crossOriginIsolated || !("serviceWorker" in navigator)) return;
+    var FLAG = "jspython_coi_reloaded";
+    navigator.serviceWorker.register("coi-serviceworker.js").then(function () {
+      function reloadOnce() {
+        if (window.crossOriginIsolated) return;
+        try {
+          if (sessionStorage.getItem(FLAG)) return;
+          sessionStorage.setItem(FLAG, "1");
+        } catch (e) { return; }
+        location.reload();
+      }
+      if (navigator.serviceWorker.controller) reloadOnce();
+      else navigator.serviceWorker.addEventListener("controllerchange", reloadOnce);
+    }).catch(function (e) { console.warn("Service Workerを登録できませんでした（input()は使えません）:", e); });
+  })();
+  </script>
+
+  <style>
+    @font-face {
+      font-family: 'MonacakomiLite';
+      src: url('MonacakomiLite.woff2') format('woff2');
+      unicode-range: U+0000-3040,U+ff01-ffff;        
+    }
+    :root{
+      --toolbar-bg: #dff2f6;
+      --panel-border: #7a7a7a;
+      --panel-header-bg: #111;
+      --panel-header-fg: #fff;
+      --btn-bg: #f2f2f2;
+      --btn-fg: #333;
+      --page-bg: #aaa;
+      --primary: #1e6bd6;
+      --statusbar-h: 2.0rem;
+      --editor-padding: .5rem;
+      /* ブラウザのズーム倍率が上限を超えた時に、JS(updateUiZoom)が 0〜1 の値を入れる。
+         ツールバー/ステータスバーに zoom として掛けて、拡大しすぎないようにする。既定は1(何もしない)。 */
+      --ui-zoom: 1;
+      /* ステータスバーの実際の高さ（上の --ui-zoom 縮小後）。body下端の余白に使う。
+         要素自身の height には --statusbar-h をそのまま使うこと（zoomが掛かるので二重に縮むため）。 */
+      --statusbar-h-eff: calc(var(--statusbar-h) * var(--ui-zoom));
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #fff;
+      color: #222;
+      /* スマホ（主にChrome for Android）で下方向へのスワイプがページの
+         プルダウン更新（リロード）として扱われてしまうのを防ぐ。 */
+      overscroll-behavior-y: contain;
+    }
+    /* 画面全体を縦に並べ、ツールバー(自然な高さ)の残りをすべてエディタに割り当てる。
+       ツールバーが1行でも2行でも崩れない（以前は高さをcalc()の固定値で見積もっていたため、
+       ツールバーの行数が変わると余白やはみ出しが出た）。下端はfixedのステータスバー分だけ空ける。 */
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      padding-bottom: var(--statusbar-h-eff);
+    }
+    /* ===== Top toolbar ===== */
+    /* できる限り1行で表示し、収まらない幅の時だけ折り返す（左グループ=ファイル操作、右グループ=実行操作）。 */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .4rem .75rem;
+      flex: none;
+      padding: .5rem .75rem;
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid #cddbe2;
+      position: sticky; top: 0; z-index: 10;
+      zoom: var(--ui-zoom);
+    }
+    .toolbar-left {
+      display: flex; align-items: center; gap: .5rem;
+    }
+    .toolbar-right {
+      margin-left: auto;
+      display: flex; align-items: center; gap: .5rem;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid #6b6b6b;
+      background: var(--btn-bg);
+      color: var(--btn-fg);
+      border-radius: .25rem;
+      padding: .4rem .75rem;
+      font-size: 1.2rem;
+      line-height: 1.1;
+      cursor: pointer;
+      box-shadow: 0 1px 0 rgba(0,0,0,.05);
+    }
+    .btn:hover { filter: brightness(0.98); }
+    .btn:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+    .btn:disabled:hover { filter: none; }
+    .btn.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+    #fname {
+      display: inline-block;
+      font-size: 1.2rem;      
+    }
+    #fileSelector {
+      background: white;
+      border: 1px solid black;
+      padding: .3rem;
+      min-width: 10rem;
+      display: inline-block;
+      font-size: 1.2rem;
+    }
+    /* ===== Split layout ===== */
+    .editor-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .6rem;
+      padding: var(--editor-padding);
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .pane {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0; /* .mobile-edit-toolbarの横スクロールを効かせるため。CSS Gridアイテムは
+                       既定でmin-width:autoとなり内容の最小幅までは縮まないため、指定が無いと
+                       ボタン列がページ全体を横に広げてしまう。 */
+    }
+    /* Editor（CodeMirror 6 をマウントするコンテナ）。
+       幅はグリッドの列（.pane）に任せる。以前は 55dvw を直接指定していたが、
+       列幅は gap を除いた約49dvwしかないため #p が右へはみ出し、
+       CodeMirrorの選択行のハイライトが枠の外まで伸びて見え、
+       実行結果ペインとの間の gap も潰れていた。 */
+    #p {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--panel-border);
+      border-radius: .2rem;
+      background: #fff;
+      overflow: hidden;
+    }
+    #p .cm-editor {
+      height: 100%;
+      font-size: 1.2rem;
+      line-height: 1.4;
+    }
+    /* CodeMirror本体が.cm-scrollerに直接font-family:monospaceを指定しているため、
+       祖先(.cm-editor)側での指定は継承で上書きされず効かない。.cm-scroller側で
+       上書きする必要がある。 */
+    #p .cm-scroller {
+      overflow: auto;
+      font-family: MonacakomiLite, Consolas, Monaco, Menlo, "SFMono-Regular", "Noto Sans Mono", monospace;
+      overscroll-behavior: contain;
+    }
+    /* 半角スペースの可視化ドットが濃すぎるとの指摘を受け、薄く調整（タブの矢印は既定のまま） */
+    #p .cm-highlightSpace {
+      opacity: .35;
+    }
+    /* basicSetupに含まれるfoldGutter()（行番号の隣にfor文などの折りたたみ矢印を表示する機能）を無効化。
+       生徒が誤って行番号付近をクリックしコードが折りたたまれて見えなくなる事故を防ぐため、
+       ガター自体を非表示にしてクリック対象を無くす。CodeMirrorの基本テーマが`.cm-gutter`の
+       displayを`!important`付きで`flex`に固定しているため、`!important`無しでは上書きできない。 */
+    #p .cm-foldGutter {
+      display: none !important;
+    }
+    /* スマホ縦画面専用の入力補助ツールバー。#pの一番下に配置し、通常は非表示。
+       ボタン数が多く1行に収まらないため、折り返さずスワイプで横スクロールする1行のバーにする。 */
+    .mobile-edit-toolbar {
+      display: none;
+      flex-wrap: nowrap;
+      gap: .4rem;
+      padding: .35rem .4rem;
+      background: var(--toolbar-bg);
+      border-top: 1px solid var(--panel-border);
+      overflow-x: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    .mobile-edit-toolbar .btn {
+      flex: none;
+      padding: .4rem .6rem;
+      min-width: 2.4rem;
+    }
+    @media (max-width: 900px) and (orientation: portrait) {
+      .mobile-edit-toolbar {
+        display: flex;
+      }
+    }
+
+    #msg {
+      display:none;
+      width: 100%;
+    }
+    /* Result */
+    .pane-header {
+      background: var(--result-label-background, var(--panel-header-bg));
+      color: var(--result-label-foreground, var(--panel-header-fg));
+      font-size: 1.1rem;
+      padding: .45rem .6rem;
+      border: 1px solid var(--panel-border);
+      border-bottom: none;
+      border-radius: .2rem .2rem 0 0;
+    }
+    /* 実行結果表示エリア（iframe廃止→divに変更） */
+    #result-area {
+      flex: 1;
+      width: 100%;
+      border: 1px solid var(--panel-border);
+      border-radius: 0 0 .2rem .2rem;
+      background: #fff;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: .5rem .75rem;
+      /* 実行結果はMonacakomiLiteを使わず、ブラウザ既定の等幅フォント(monospace)だけにする */
+      font-family: monospace;
+      font-size: 1.1rem;
+      line-height: 1.5;
+    }
+    #result-area pre {
+      /* <pre>はブラウザ標準CSSが要素に直接 font-family: monospace を指定しており、親(#result-area)の
+         指定を継承しない。#result-areaのフォントを変えた時に<pre>だけ食い違わないよう、明示的にinheritする。 */
+      font-family: inherit;
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #result-area .py-error {
+      color: #c0392b;
+    }
+    #result-area .py-stdout {
+      color: #222;
+    }
+    #result-area img.py-plot {
+      max-width: 100%;
+      margin-top: .5rem;
+      display: block;
+    }
+    /* input()呼び出し中に表示するコンソール風のインライン入力欄 */
+    #result-area .py-console {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #222;
+    }
+    #result-area .py-input-field {
+      border: none;
+      border-bottom: 1px solid var(--primary);
+      background: transparent;
+      font-family: inherit;
+      font-size: inherit;
+      color: inherit;
+      outline: none;
+      min-width: 4rem;
+      width: 12rem;
+      max-width: 90%;
+      padding: 0 .1rem;
+      vertical-align: baseline;
+    }
+    /* 入力欄の右に置く改行マーク。タップ/クリックでEnterと同じく入力を確定する（スマホでEnterキーが分かりにくいため） */
+    #result-area .py-input-submit {
+      appearance: none;
+      margin-left: .3rem;
+      min-width: 2.4rem;
+      height: 1.9rem;
+      padding: 0 .4rem;
+      border: 1.5px solid #222;
+      border-radius: .3rem;
+      background: #fff;
+      color: #222;
+      font-size: 1rem;
+      line-height: 1;
+      cursor: pointer;
+      vertical-align: middle;
+    }
+    #result-area .py-input-submit:hover { background: #eef4ff; }
+    #result-area .py-input-submit:active { background: #dbe8ff; }
+    /* Pyodide読み込み中オーバーレイ */
+    #pyodide-loading {
+      display: none; /* 準備中でも編集できるよう既定では出さない。準備前に実行された時だけJSで表示する */
+      position: fixed;
+      inset: 0;
+      background: rgba(255,255,255,.85);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      font-size: 1.2rem;
+      gap: 1rem;
+    }
+    #py-boot-note {
+      font-size: .8rem;
+      color: #555;
+      white-space: nowrap;
+    }
+    #pyodide-loading progress {
+      width: 260px;
+    }
+    /* StatusBar */
+    .statusbar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--statusbar-h);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 .6rem;
+      background: #ddd;
+      border-top: 1px solid #cddbe2;
+      font-size: .95rem;
+      color: #222;
+      z-index: 9;
+      zoom: var(--ui-zoom);
+    }
+    .status-left, .status-right {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .status-right {
+      font-weight: 500;
+      flex: 0 0 auto;
+      overflow: visible;
+      text-overflow: clip;
+      margin-left: .6rem;
+    }
+    .status-left {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+    #status-user {
+      display: flex;
+      min-width: 0;
+      margin-left: .3rem;
+    }
+    #status-user .user-name { flex: 0 0 auto; }
+    #status-user .user-id {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @media (max-width: 600px) {
+      #program-version .app-name { display: none; }
+    }
+    .warn{
+      background:red !important;
+    }
+    /* 保存状態インジケータ（左下の●）。既定（クラス無し）は黒＝読み込みしただけで未編集。
+       状態が変わるたびにJS側のsetSaveIndicator()がクラスを付け替える。 */
+    #loadstatus.status-edited {
+      color: var(--primary); /* 青: 編集したが未保存・未実行 */
+    }
+    #loadstatus.status-saving {
+      color: #e0a800; /* 黄: 保存処理中（バックエンドの応答待ち） */
+    }
+    #loadstatus.status-saved {
+      color: #2e8b30; /* 緑: 保存完了 */
+    }
+    #loadstatus.status-error {
+      color: #c0392b; /* 赤: 保存失敗（バックエンドと通信できない等） */
+    }
+    /* 保存に失敗していることを、色だけでなく文言でも伝えるための表示。
+       色の変化だけだと生徒が気づかず、保存できていないまま作業を続けてしまうため。 */
+    #save-error {
+      display: none;
+      margin-left: .6rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    #save-error.show {
+      display: inline;
+    }
+    .dot {
+        opacity: 0;
+        animation: fade1 1.5s infinite;
+    }
+    .dot:nth-child(2) {
+        animation: fade2 1.5s infinite;
+    }
+    .dot:nth-child(3) {
+        animation: fade3 1.5s infinite;
+    }
+    @keyframes fade1 { 0%, 25% { opacity: 0; } 26%, 100% { opacity: 1; } }    
+    @keyframes fade2 { 0%, 50% { opacity: 0; } 51%, 100% { opacity: 1; } }    
+    @keyframes fade3 { 0%, 75% { opacity: 0; } 76%, 100% { opacity: 1; } }        
+    
+    /* Responsive */
+    .btn{
+      white-space: nowrap;
+      overflow:hidden;
+    }
+    /* 2ペインを縦に積むのは「縦長の画面」の時だけ。幅が狭いだけ（拡大表示した横長の画面など）では、
+       左右2ペインのままにする。 */
+    @media (max-width: 900px) and (orientation: portrait) {
+      .editor-layout {
+        grid-template-columns: 1fr;
+      }
+      /* 1列レイアウトでは幅はグリッドの列に任せる（#p/#result-area とも width:100%）。
+         ここでは縦に潰れすぎないよう最低の高さだけ確保する。 */
+      #p, #result-area {
+        min-height: 30vh;
+      }
+    }
+    /* ツールバーをできる限り1行に収めるため、幅が狭い時は「元に戻す」「やり直し」の文字を隠してアイコンだけにする。 */
+    @media (max-width: 900px) {
+      .sp-hidden{
+        display:none;
+      }
+    }
+
+    /* ===== 静的版だけのスタイル ===== */
+    .icon-btn {
+      appearance: none;
+      background: none;
+      border: none;
+      padding: 0;
+      margin-left: .4rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      color: #333;
+    }
+    .icon-btn:hover { color: var(--primary); }
+    #status-note {
+      margin-left: .8rem;
+      color: #8a5a00;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #status-user { cursor: default; }
+  </style>
+</head>
+
+<body>
+
+  <!-- Pyodide読み込み中オーバーレイ -->
+  <div id="pyodide-loading">
+    <div>🐍 Pythonを準備しています<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div>
+    <progress id="pyodide-progress" value="0" max="100"></progress>
+    <div id="pyodide-status" style="font-size:.9rem;color:#555;">Pyodideをダウンロード中...</div>
+  </div>
+
+  <!-- ===== ツールバー ===== -->
+  <header class="toolbar" role="toolbar" aria-label="エディタ操作">
+    <section class="toolbar-left">
+      <div id="fname">
+        <!-- Python ロゴ (SVG) -->
+        <svg width="32" height="32" viewBox="0 0 256 255" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet">
+          <defs><linearGradient x1="12.959%" y1="12.039%" x2="79.639%" y2="78.201%" id="a"><stop stop-color="#387EB8" offset="0%"/><stop stop-color="#366994" offset="100%"/></linearGradient><linearGradient x1="19.128%" y1="20.579%" x2="90.742%" y2="88.429%" id="b"><stop stop-color="#FFE052" offset="0%"/><stop stop-color="#FFC331" offset="100%"/></linearGradient></defs>
+          <path d="M126.916.072c-64.832 0-60.784 28.115-60.784 28.115l.072 29.128h61.868v8.745H41.631S.145 61.355.145 126.77c0 65.417 36.21 63.097 36.21 63.097h21.61v-30.356s-1.165-36.21 35.632-36.21h61.362s34.475.557 34.475-33.319V33.97S194.67.072 126.916.072zM92.802 19.66a11.12 11.12 0 0 1 11.13 11.13 11.12 11.12 0 0 1-11.13 11.13 11.12 11.12 0 0 1-11.13-11.13 11.12 11.12 0 0 1 11.13-11.13z" fill="url(#a)"/>
+          <path d="M128.757 254.126c64.832 0 60.784-28.115 60.784-28.115l-.072-29.127H127.6v-8.745h86.441s41.486 4.705 41.486-60.712c0-65.416-36.21-63.096-36.21-63.096h-21.61v30.355s1.165 36.21-35.632 36.21h-61.362s-34.475-.557-34.475 33.32v56.013s-5.235 33.897 62.518 33.897zm34.114-19.586a11.12 11.12 0 0 1-11.13-11.13 11.12 11.12 0 0 1 11.13-11.131 11.12 11.12 0 0 1 11.13 11.13 11.12 11.12 0 0 1-11.13 11.13z" fill="url(#b)"/>
+        </svg>
+      </div>
+
+      <select id="fileSelector" style="margin-left: 10px;font-size:1.2rem;" aria-label="ファイルを選ぶ"></select>
+      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 640 640" onclick="createNewFile()" style="cursor:pointer;">
+        <path d="M128 64C92.7 64 64 92.7 64 128L64 512C64 547.3 92.7 576 128 576L308 576C285.3 544.5 272 505.8 272 464C272 363.4 349.4 280.8 448 272.7L448 234.6C448 217.6 441.3 201.3 429.3 189.3L322.7 82.7C310.7 70.7 294.5 64 277.5 64L128 64zM389.5 240L296 240C282.7 240 272 229.3 272 216L272 122.5L389.5 240zM464 608C543.5 608 608 543.5 608 464C608 384.5 543.5 320 464 320C384.5 320 320 384.5 320 464C320 543.5 384.5 608 464 608zM480 400L480 448L528 448C536.8 448 544 455.2 544 464C544 472.8 536.8 480 528 480L480 480L480 528C480 536.8 472.8 544 464 544C455.2 544 448 536.8 448 528L448 480L400 480C391.2 480 384 472.8 384 464C384 455.2 391.2 448 400 448L448 448L448 400C448 391.2 455.2 384 464 384C472.8 384 480 391.2 480 400z"/>
+      </svg>
+      <button class="icon-btn" type="button" onclick="downloadPy()" title="このファイルを .py としてダウンロード" aria-label=".pyをダウンロード">
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 4v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/>
+        </svg>
+      </button>
+      <button class="icon-btn" type="button" onclick="openLocalFile()" title="パソコンの .py ファイルを読み込む" aria-label=".pyを読み込む">
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 7.5V18a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5V9.5A1.5 1.5 0 0 0 19 8h-7l-2-2.5H5A1.5 1.5 0 0 0 3.5 7z"/>
+          <path d="M12 17v-5"/><path d="M9.5 14.5 12 12l2.5 2.5"/>
+        </svg>
+      </button>
+      <button class="icon-btn" type="button" onclick="deleteCurrentFile()" title="このファイルを削除" aria-label="ファイルを削除">
+        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 7h15"/><path d="M9.5 7V4.5h5V7"/><path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path d="M10 11v6M14 11v6"/>
+        </svg>
+      </button>
+    </section>
+    <section class="toolbar-right">
+      <span id="py-boot-note" aria-live="polite"></span>
+      <button class="btn" type="button" id="undo-btn"
+              title="元に戻す (Ctrl+Z)"
+              onclick="cmUndo()">
+        ↶ <span class='sp-hidden'>元に戻す</span>
+      </button>
+      <button class="btn" type="button" id="redo-btn"
+              title="やり直し (Ctrl+Y)"
+              onclick="cmRedo()">
+        ↷ <span class='sp-hidden'>やり直し</span>
+      </button>
+      <button class="btn primary" type="button" id="run-btn" onclick="exec()">
+        保存＆実行
+      </button>
+    </section>
+  </header>
+
+  <!-- ===== エディタ ===== -->
+  <main class="editor-layout" role="main">
+    <section class="pane" aria-label="コード入力">
+      <div id="p"></div>
+      <div id="msg"></div>
+      <!-- スマホ縦画面専用の入力補助（物理Tabキーが無い環境向け）。CSSで通常は非表示。 -->
+      <div class="mobile-edit-toolbar" role="toolbar" aria-label="スマホ入力補助">
+        <button class="btn" type="button" title="インデント（Tabキーの代わり）" onclick="cmIndent()">⇥</button>
+        <button class="btn" type="button" title="インデント解除（Shift+Tabの代わり）" onclick="cmOutdent()">⇤</button>
+        <button class="btn" type="button" title="シングルクォートを入力" onclick="cmInsertSingleQuote()">'</button>
+        <button class="btn" type="button" title="ダブルクォートを入力" onclick="cmInsertDoubleQuote()">"</button>
+        <button class="btn" type="button" title="不等号（小なり）を入力" onclick="cmInsertText('&lt;')">&lt;</button>
+        <button class="btn" type="button" title="不等号（大なり）を入力" onclick="cmInsertText('&gt;')">&gt;</button>
+        <button class="btn" type="button" title="角括弧（開き）を入力" onclick="cmInsertText('[')">[</button>
+        <button class="btn" type="button" title="角括弧（閉じ）を入力" onclick="cmInsertText(']')">]</button>
+        <button class="btn" type="button" title="波括弧（開き）を入力" onclick="cmInsertText('{')">{</button>
+        <button class="btn" type="button" title="波括弧（閉じ）を入力" onclick="cmInsertText('}')">}</button>
+        <button class="btn" type="button" title="パーセントを入力" onclick="cmInsertText('%')">%</button>
+        <button class="btn" type="button" title="キャレットを入力" onclick="cmInsertText('^')">^</button>
+        <button class="btn" type="button" title="バックスラッシュを入力" onclick="cmInsertText('\\')">\</button>
+      </div>
+    </section>
+    <section class="pane" aria-label="実行結果の表示">
+      <div class="pane-header">実行結果</div>
+      <div id="result-area"><pre class="py-stdout">（まだ実行されていません）</pre></div>
+    </section>
+  </main>
+
+  <!-- ===== ステータスバー ===== -->
+  <footer class="statusbar" role="contentinfo" aria-label="ステータス">
+    <div class="status-left">
+      <span id='loadstatus'>●</span>
+      <span id="status-user">ブラウザ内に保存（localStorage）</span>
+      <span id="save-error"></span>
+      <span id="status-note"></span>
+    </div>
+    <div class="status-right">
+      <span id="program-version"><span class="app-name">JS-Python Editor 静的版 </span>Ver.0.5.0048</span>
+    </div>
+  </footer>
+
+  <!-- パソコンの .py ファイルを読み込むための、画面には出さないファイル選択 -->
+  <input type="file" id="py-file-input" accept=".py,text/x-python,text/plain" multiple hidden>
+
+  <script>
+  // ブラウザのズーム（Ctrl+ +/-）で、コード・実行結果は大きくなってよいが、ツールバーとステータスバーは
+  // 大きくなりすぎないようにする。CSSだけではブラウザのズーム倍率を知る手段が無いため、JSで倍率を求め、
+  // 上限(UI_ZOOM_MAX)を超えた分を --ui-zoom（0〜1）として入れ、CSSの zoom で打ち消す。
+  //   倍率 = outerWidth / innerWidth（outerWidthはズームの影響を受けず、innerWidthはCSS pxなのでズームで縮む）。
+  //   devicePixelRatio（OSの拡大率×ズーム）を超える値は「開発者ツールを横に出している」等の誤検出なので採らない。
+  //   スマホ等のタッチ主体の端末では outerWidth の意味が違うことがあるため、マウス主体の端末だけで有効にする。
+  // 上限を変えたい時は UI_ZOOM_MAX だけ変える（1.0 なら、ズームしてもUIは100%の大きさのまま）。
+  (function () {
+    const UI_ZOOM_MAX = 1.25;
+    const root = document.documentElement;
+    const mouseDevice = window.matchMedia ? window.matchMedia("(hover: hover) and (pointer: fine)") : null;
+    function updateUiZoom() {
+      let scale = 1;
+      if (mouseDevice && mouseDevice.matches && window.outerWidth > 0 && window.innerWidth > 0) {
+        const z = Math.min(window.outerWidth / window.innerWidth, window.devicePixelRatio || 1);
+        if (z > UI_ZOOM_MAX * 1.02) scale = UI_ZOOM_MAX / z; // 1.02は枠線・スクロールバー分の誤差よけ
+      }
+      root.style.setProperty("--ui-zoom", scale.toFixed(4));
+    }
+    updateUiZoom();
+    window.addEventListener("resize", updateUiZoom); // ズームを変えるとresizeが発火する
+  })();
+  </script>
+
+  <script type="text/plain" id="py-worker-src">
+"use strict";
+importScripts("https://cdn.jsdelivr.net/pyodide/v0.27.5/full/pyodide.js");
+
+let pyodide = null;
+let ctrl = null;      // Int32Array(sharedBuf, 0, 2)  [0]=signal, [1]=length
+let dataBytes = null; // Uint8Array(sharedBuf, 8...)  入力文字列(UTF-8)の格納先
+let hasMatplotlib = false; // URLクエリ「matplotlib」指定時のみtrue（既定では読み込み時間短縮のため未読込）
+
+function requestInput(promptText, currentStdout) {
+  // SharedArrayBufferが使えない環境（静的版でCOOP/COEPが効かない場合など）ではinput()を待機できない。
+  if (!ctrl) throw new Error("この環境では input() を使えません（ブラウザのSharedArrayBufferが有効でないため）。");
+  Atomics.store(ctrl, 0, 0);
+  postMessage({ type: "input-request", prompt: promptText, stdout: currentStdout });
+  Atomics.wait(ctrl, 0, 0); // メインスレッドがAtomics.notifyするまでWorkerスレッドを本当に一時停止
+  // ctrl[0] === 2 は「実行の中断」の合図（メインスレッドが「保存＆実行」の再押下で送る）。
+  // 例外を投げてPythonの実行を抜ける。Workerは終了せず、Pyodideはそのまま使い回せる。
+  if (Atomics.load(ctrl, 0) === 2) throw new Error("input() aborted");
+  const len = Atomics.load(ctrl, 1);
+  const bytes = dataBytes.slice(0, len);
+  return new TextDecoder().decode(bytes);
+}
+
+async function restoreStdio() {
+  await pyodide.runPythonAsync(`
+sys.stdout = sys.__stdout__
+sys.stderr = sys.__stderr__
+`);
+}
+
+async function init(sharedBuf, loadMatplotlib, loadNumpy) {
+  ctrl = sharedBuf ? new Int32Array(sharedBuf, 0, 2) : null;
+  dataBytes = sharedBuf ? new Uint8Array(sharedBuf, 8) : null;
+
+  postMessage({ type: "progress", value: 10, status: "Pyodideを読み込み中..." });
+  pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.27.5/full/" });
+
+  await pyodide.runPythonAsync(`
+import sys, io
+
+class _CaptureIO(io.StringIO):
+    pass
+
+_stdout_buf = _CaptureIO()
+_stderr_buf = _CaptureIO()
+`);
+
+  if (loadMatplotlib) {
+    // matplotlibはnumpyに依存しており、loadPackage(["matplotlib"])が自動的にnumpyも
+    // 一緒にインストールする。そのため、numpyも同時に指定されていても別途loadPackageは呼ばない
+    // （既にインストール済みのパッケージへの再度のloadPackage呼び出しは無害だが、進捗表示が
+    // 二重に出てしまうのを避けるため、if/elseで排他にしている）。
+    postMessage({ type: "progress", value: 60, status: "matplotlibをインストール中..." });
+    await pyodide.loadPackage(["matplotlib"]);
+    await pyodide.runPythonAsync(`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+`);
+    hasMatplotlib = true;
+  } else if (loadNumpy) {
+    // numpy単体はmatplotlibよりずっと軽いが、既定では読み込まない（matplotlibと同じ理由で
+    // 起動を軽くするため）。URLクエリ「numpy」指定時のみ読み込む。
+    postMessage({ type: "progress", value: 60, status: "numpyをインストール中..." });
+    await pyodide.loadPackage(["numpy"]);
+  }
+
+  postMessage({ type: "progress", value: 90, status: "準備完了" });
+
+  pyodide.globals.set("_js_input", (promptText) => {
+    const currentOut = pyodide.globals.get("_stdout_buf").getvalue();
+    return requestInput(promptText ?? "", currentOut);
+  });
+
+  await pyodide.runPythonAsync(`
+import builtins
+
+def _input_override(prompt=""):
+    if prompt:
+        sys.stdout.write(str(prompt))
+        sys.stdout.flush()
+    result = _js_input(str(prompt) if prompt else "")
+    sys.stdout.write(str(result) + "\\n")
+    return result
+
+builtins.input = _input_override
+`);
+
+  postMessage({ type: "progress", value: 100, status: "準備完了" });
+  postMessage({ type: "ready" });
+}
+
+async function runCode(code, filename) {
+  await pyodide.runPythonAsync(`
+_stdout_buf = _CaptureIO()
+_stderr_buf = _CaptureIO()
+sys.stdout = _stdout_buf
+sys.stderr = _stderr_buf
+`);
+  if (hasMatplotlib) {
+    await pyodide.runPythonAsync("plt.close('all')");
+  }
+
+  let execError = null;
+  try {
+    await pyodide.runPythonAsync(code, { filename });
+  } catch (e) {
+    execError = e;
+  }
+
+  const stdout = await pyodide.runPythonAsync("_stdout_buf.getvalue()");
+  let stderr = await pyodide.runPythonAsync("_stderr_buf.getvalue()");
+  await restoreStdio();
+
+  if (execError && !stderr) {
+    stderr = execError.message || String(execError);
+  }
+
+  let imgData = null;
+  if (hasMatplotlib) {
+    const figCount = await pyodide.runPythonAsync("len(plt.get_fignums())");
+    if (figCount > 0) {
+      imgData = await pyodide.runPythonAsync(`
+import io, base64
+_buf = io.BytesIO()
+plt.savefig(_buf, format='png', bbox_inches='tight')
+_buf.seek(0)
+base64.b64encode(_buf.read()).decode('utf-8')
+`);
+    }
+  }
+
+  postMessage({ type: "result", stdout, stderr, imgData });
+}
+
+self.onmessage = async (ev) => {
+  const msg = ev.data;
+  if (msg.type === "init") {
+    try {
+      await init(msg.sharedBuf, msg.loadMatplotlib, msg.loadNumpy);
+    } catch (e) {
+      postMessage({ type: "load-error", message: (e && e.message) || String(e) });
+    }
+  } else if (msg.type === "run") {
+    try {
+      await runCode(msg.code, msg.filename);
+    } catch (e) {
+      try { await restoreStdio(); } catch (_) {}
+      postMessage({ type: "result", stdout: "", stderr: (e && e.message) || String(e), imgData: null });
+    }
+  }
+};
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "codemirror": "https://esm.sh/codemirror@6.0.2?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete",
+      "@codemirror/state": "https://esm.sh/@codemirror/state@6.7.2",
+      "@codemirror/view": "https://esm.sh/@codemirror/view@6.43.11?deps=@codemirror/state@6.7.2",
+      "@codemirror/language": "https://esm.sh/@codemirror/language@6.12.4?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete",
+      "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.20.3?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete",
+      "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.11.0?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete",
+      "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.2.1?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete"
+    }
+  }
+  </script>
+
+<script type="module">
+import {EditorView, basicSetup} from "codemirror";
+import {EditorState, Prec} from "@codemirror/state";
+import {keymap, highlightWhitespace} from "@codemirror/view";
+import {indentUnit, indentService} from "@codemirror/language";
+import {indentWithTab, indentMore, indentLess, insertNewlineKeepIndent, undo, redo, undoDepth, redoDepth} from "@codemirror/commands";
+import {python} from "@codemirror/lang-python";
+import {autocompletion} from "@codemirror/autocomplete";
+
+/* ========================================================
+   静的版の起動設定・ファイル名
+   ======================================================== */
+// 起動オプション用に予約済みのクエリキー（ファイル名としては扱わない）
+const RESERVED_QUERY_KEYS = ["matplotlib", "numpy"];
+
+// COOP/COEPが効かずSharedArrayBufferが使えない環境（file://で開いた・Service Workerが動かない等）でも、
+// input()以外は実行できるようにする（input()は説明付きのエラーになる）。
+const ALLOW_WITHOUT_INPUT = true;
+
+let jsfile = null;
+let wantMatplotlib = false;
+let wantNumpy = false;
+{
+  const params = new URLSearchParams(window.location.search);
+  wantMatplotlib = params.has("matplotlib");
+  wantNumpy = params.has("numpy");
+  for (const key of params.keys()) {
+    if (RESERVED_QUERY_KEYS.includes(key)) continue;
+    jsfile = key;
+    break;
+  }
+}
+let is_edit = false;
+
+// ファイル名の表示用に .py を付与する（入力欄・URL・option.value 等の実体には付けない）
+function displayFilename(name){
+  return (name ?? "") + ".py";
+}
+
+/* ========================================================
+   保存状態インジケータ（左下の●）
+   ======================================================== */
+const SAVE_STATUS_CLASSES = ["status-edited", "status-saving", "status-saved", "status-error"];
+const SAVE_STATUS_LABELS = {
+  loaded: "読み込み済み（未編集）",
+  edited: "未保存の変更があります",
+  saving: "保存処理中です",
+  saved:  "保存が完了しています",
+  error:  "保存に失敗しています",
+};
+// state: 'loaded'（黒・既定）/ 'edited'（青）/ 'saving'（黄）/ 'saved'（緑）/ 'error'（赤）
+function setSaveIndicator(state){
+  const dot = document.getElementById("loadstatus");
+  if(!dot) return;
+  dot.classList.remove(...SAVE_STATUS_CLASSES);
+  if(state === "edited") dot.classList.add("status-edited");
+  else if(state === "saving") dot.classList.add("status-saving");
+  else if(state === "saved") dot.classList.add("status-saved");
+  else if(state === "error") dot.classList.add("status-error");
+  dot.title = SAVE_STATUS_LABELS[state] ?? "";
+}
+
+/* ========================================================
+   エディタ本体（CodeMirror 6）。動的版 index.php と共通
+   ======================================================== */
+// undo/redoできる履歴が無い時はボタンを非活性にする（setState()で履歴がリセットされた
+// 直後や、履歴の先頭/末尾に達した状態が誤操作を誘発しないようにするため）
+function updateUndoRedoButtons(state){
+  document.getElementById("undo-btn").disabled = undoDepth(state) === 0;
+  document.getElementById("redo-btn").disabled = redoDepth(state) === 0;
+}
+
+const cmExtensions = [
+  basicSetup,
+  // 授業（情報Ⅰ）で自力で打たせるため、サジェスト（自動補完）を無効にする。basicSetup には
+  // autocompletion() が含まれるため、候補の取得元(override)を空にして、入力中・Ctrl+Spaceのどちらでも
+  // 候補が出ないようにする。設定の merge は「同じキーを両方が指定しない限り」衝突しない。
+  autocompletion({ activateOnTyping: false, override: [] }),
+  // 括弧・引用符の自動閉じ（basicSetup内のcloseBrackets）も、授業で自力で打たせるため無効にする。
+  // closeBracketsは言語データ "closeBrackets" の brackets を見て動くので、Python言語のそれより先に
+  // 読まれるよう Prec.highest で「brackets: 空」を差し込む（Backspaceでの対括弧削除も同じ設定を見るので効かなくなる）。
+  Prec.highest(EditorState.languageData.of(() => [{ closeBrackets: { brackets: [] } }])),
+  python(),
+  indentUnit.of("    "),
+  // 字下げの自動計算を無効にする。basicSetupのindentOnInput（else:/elif/except/finally:や閉じ括弧を打つと
+  // 字下げが自動で戻る）は、字下げの計算結果がnullなら何もしないため、「常にnull」を返すサービスを最優先で
+  // 登録する（言語データのindentOnInputは全ての値が集められて上書きできないので、この方法による）。
+  // 副作用として「選択範囲を自動整形」(indentSelection)も効かなくなるが、授業の趣旨に合うので問題ない。
+  Prec.highest(indentService.of(() => null)),
+  // Enterでの改行は、if/for/def等の「:」の次の行を自動で字下げせず、直前の行の字下げをそのまま引き継ぐだけにする
+  // （授業で字下げを自分で入れさせるため）。basicSetupの標準Enter(insertNewlineAndIndent)より先に効かせる。
+  Prec.highest(keymap.of([{ key: "Enter", run: insertNewlineKeepIndent }])),
+  keymap.of([indentWithTab]),
+  highlightWhitespace(), // タブ・空白を薄い矢印/ドットで可視化（スマホ入力時の誤入力対策）
+  EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      is_edit = true;
+      setSaveIndicator('edited');
+      if (typeof onDocChanged === "function") onDocChanged(); // 静的版の自動保存用フック（動的版では未定義）
+    }
+    updateUndoRedoButtons(update.state);
+  }),
+];
+const cmView = new EditorView({
+  doc: "",
+  extensions: cmExtensions,
+  parent: document.getElementById("p"),
+});
+updateUndoRedoButtons(cmView.state);
+
+function cmUndo(){
+  cmView.focus();
+  undo(cmView);
+}
+function cmRedo(){
+  cmView.focus();
+  redo(cmView);
+}
+// 物理Tabキーが無いスマホ向けの入力補助ボタン。indentWithTabと同じコマンドを直接呼ぶ。
+function cmIndent(){
+  cmView.focus();
+  indentMore(cmView);
+}
+function cmOutdent(){
+  cmView.focus();
+  indentLess(cmView);
+}
+// カーソル位置（または選択範囲を置き換えて）に文字を挿入する。クオート入力補助ボタン用。
+function cmInsertText(text){
+  cmView.focus();
+  const {from, to} = cmView.state.selection.main;
+  cmView.dispatch({
+    changes: { from, to, insert: text },
+    selection: { anchor: from + text.length },
+  });
+}
+function cmInsertSingleQuote(){ cmInsertText("'"); }
+function cmInsertDoubleQuote(){ cmInsertText('"'); }
+
+function getSourceCode(){
+  return cmView.state.doc.toString();
+}
+function setSourceCode(code){
+  // dispatch()による置換だと、この置換自体がundo履歴に積まれてしまい、
+  // ファイル切り替え後にundoすると前のファイルの内容へ戻ってしまう。
+  // setState()で状態そのものを作り直すことで、履歴をリセットする。
+  cmView.setState(EditorState.create({
+    doc: code ?? "",
+    extensions: cmExtensions,
+  }));
+  // setState()はupdateListenerを経由しないため、undo/redoボタンの状態をここで明示的に更新する
+  updateUndoRedoButtons(cmView.state);
+}
+
+/* ========================================================
+   Python実行（Pyodide, Web Worker）。動的版 index.php と共通
+   ======================================================== */
+// 動的版の exec() が呼ぶ「他端末との保存競合の確認」。静的版には他端末が無いので何もしない。
+async function checkRemoteConflict(){}
+
+/* ========================================================
+   Pyodide 初期化（Web Worker上で実行）
+   ======================================================== */
+const INPUT_BUF_BYTES = 4096;
+let pyWorker = null;
+let pyodideReady = false;
+let execRunning = false;
+
+// input()呼び出し時にAtomics.waitでWorkerスレッドを一時停止し、メインスレッドが
+// 入力欄の内容をここに書き込んでAtomics.notifyすることで再開する。
+const sharedBuf = (typeof SharedArrayBuffer !== "undefined")
+  ? new SharedArrayBuffer(8 + INPUT_BUF_BYTES)
+  : null;
+const ctrl = sharedBuf ? new Int32Array(sharedBuf, 0, 2) : null;
+const dataBytes = sharedBuf ? new Uint8Array(sharedBuf, 8) : null;
+
+let resolveRun = null;
+let inputWaiting = false; // input()の入力待ち中（Workerが Atomics.wait で止まっている）か
+
+// Pyodideの準備完了を待つためのPromise。準備前に「保存＆実行」が押された場合、
+// exec() がこれを待ってから実行する（読み込み失敗時は pyBootError に理由が入り、rejectされる）。
+let pyBootError = null;
+let resolvePyBoot = null, rejectPyBoot = null;
+let pyBootPromise = null;
+function resetPyBoot() {
+  pyBootError = null;
+  pyBootPromise = new Promise((resolve, reject) => { resolvePyBoot = resolve; rejectPyBoot = reject; });
+  pyBootPromise.catch(() => {}); // 誰も待っていなくても未処理rejectの警告を出さない
+}
+resetPyBoot();
+
+function setPyBootNote(text) {
+  const el = document.getElementById("py-boot-note");
+  if (el) el.textContent = text;
+}
+
+// 一時的な通信不良などによる起動失敗は自動で再試行する（同じ待機Promiseを引き継ぐ）。
+let pyBootRetries = 0;
+const PY_BOOT_MAX_RETRIES = 2;
+function failPyBoot(message, worker) {
+  const statusEl   = document.getElementById("pyodide-status");
+  const progressEl = document.getElementById("pyodide-progress");
+  if (pyBootRetries < PY_BOOT_MAX_RETRIES) {
+    pyBootRetries++;
+    try { worker.terminate(); } catch (_) {}
+    pyWorker = null;
+    statusEl.textContent = "読み込みに失敗したため再試行しています...";
+    progressEl.value = 0;
+    setPyBootNote("🐍 Python再試行中…");
+    initPyodide();
+    return;
+  }
+  pyBootError = "Pyodideの読み込みに失敗しました: " + message;
+  statusEl.textContent = pyBootError;
+  progressEl.value = 0;
+  setPyBootNote("⚠ Python準備失敗");
+  rejectPyBoot(new Error(pyBootError));
+}
+
+// 失敗状態から、待機Promiseと Worker を作り直して準備をやり直す。
+function restartPyBoot() {
+  if (pyWorker) { pyWorker.terminate(); pyWorker = null; }
+  pyodideReady = false;
+  pyBootRetries = 0;
+  resetPyBoot();
+  initPyodide();
+}
+
+function initPyodide() {
+  const loadingEl  = document.getElementById("pyodide-loading");
+  const progressEl = document.getElementById("pyodide-progress");
+  const statusEl   = document.getElementById("pyodide-status");
+
+  if ((!sharedBuf || !window.crossOriginIsolated) && !ALLOW_WITHOUT_INPUT) {
+    statusEl.textContent = "このブラウザ/環境では対話的な実行に必要な機能（SharedArrayBuffer）が利用できません。";
+    progressEl.style.display = "none";
+    pyBootError = statusEl.textContent;
+    rejectPyBoot(new Error(pyBootError));
+    return;
+  }
+
+  setPyBootNote("🐍 Python準備中…");
+  const workerSrc = document.getElementById("py-worker-src").textContent;
+  const blob = new Blob([workerSrc], { type: "text/javascript" });
+  const worker = pyWorker = new Worker(URL.createObjectURL(blob));
+
+  worker.onmessage = (ev) => {
+    if (worker !== pyWorker) return; // 強制終了した古いWorkerからのメッセージは無視する
+    const msg = ev.data;
+    if (msg.type === "progress") {
+      progressEl.value = msg.value;
+      statusEl.textContent = msg.status;
+      if (!pyodideReady) setPyBootNote("🐍 Python準備中… " + msg.value + "%");
+    } else if (msg.type === "ready") {
+      pyodideReady = true;
+      pyBootRetries = 0;
+      loadingEl.style.display = "none";
+      setPyBootNote("");
+      resolvePyBoot();
+    } else if (msg.type === "load-error") {
+      console.error(msg.message);
+      failPyBoot(msg.message, worker);
+    } else if (msg.type === "input-request") {
+      showInlineInput(msg.stdout);
+    } else if (msg.type === "result") {
+      inputWaiting = false;
+      if (resolveRun) {
+        const r = resolveRun;
+        resolveRun = null;
+        r(msg);
+      }
+    }
+  };
+  worker.onerror = (e) => {
+    if (worker !== pyWorker) return;
+    console.error(e);
+    failPyBoot(e.message, worker);
+  };
+
+  worker.postMessage({ type: "init", sharedBuf, loadMatplotlib: wantMatplotlib, loadNumpy: wantNumpy });
+}
+
+// ページロード後すぐに初期化開始
+initPyodide();
+
+// 実行中のPythonを強制終了し、新しいWorkerでPyodideを準備し直す。
+// input()待ち中のWorkerは Atomics.wait で止まっており、メインスレッドからは中断できないため、
+// Worker自体を terminate() するのが唯一の確実な方法（再準備のため読み込み中画面が一瞬出る）。
+async function abortRunningPy() {
+  // input()待ちなら、Workerを終了せず input() を中断するだけで済ませる（Pyodideの再読み込みを避ける）。
+  if (inputWaiting && pyWorker && resolveRun) {
+    const old = resolveRun;
+    const settled = new Promise((res) => {
+      resolveRun = (msg) => { old({ aborted: true }); res(true); };
+    });
+    inputWaiting = false;
+    Atomics.store(ctrl, 1, 0);
+    Atomics.store(ctrl, 0, 2);
+    Atomics.notify(ctrl, 0);
+    // ユーザコードが例外を握りつぶして走り続けた場合に備え、一定時間で諦めて作り直す。
+    const ok = await Promise.race([settled, new Promise((res) => setTimeout(() => res(false), 1500))]);
+    if (ok) return;
+  }
+  inputWaiting = false;
+  if (pyWorker) { pyWorker.terminate(); pyWorker = null; }
+  pyodideReady = false;
+  if (ctrl) Atomics.store(ctrl, 0, 0);
+  if (resolveRun) {
+    const r = resolveRun;
+    resolveRun = null;
+    r({ aborted: true });
+  }
+  resetPyBoot();
+  initPyodide();
+}
+
+function runPy(code, filename) {
+  return new Promise((resolve) => {
+    resolveRun = resolve;
+    pyWorker.postMessage({ type: "run", code, filename });
+  });
+}
+
+/* ---------- コンソール風のインライン入力欄 ---------- */
+function escapeHtml(text) {
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showInlineInput(stdoutSoFar) {
+  inputWaiting = true;
+  const resultArea = document.getElementById("result-area");
+  resultArea.innerHTML =
+    `<div class="py-console"><span class="py-console-text">${escapeHtml(stdoutSoFar)}</span>` +
+    `<input type="text" class="py-input-field" autocomplete="off" spellcheck="false">` +
+    `<button type="button" class="py-input-submit" title="入力を確定（Enter）" aria-label="入力を確定">↵</button></div>`;
+  const input = resultArea.querySelector(".py-input-field");
+  input.focus();
+  resultArea.querySelector(".py-input-submit").addEventListener("click", () => {
+    submitInlineInput(input.value);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submitInlineInput(input.value);
+    }
+  });
+}
+
+function submitInlineInput(value) {
+  inputWaiting = false;
+  const resultArea = document.getElementById("result-area");
+  const input = resultArea.querySelector(".py-input-field");
+  const textSpan = resultArea.querySelector(".py-console-text");
+  const submitBtn = resultArea.querySelector(".py-input-submit");
+  if (!input) return; // 確定済み（Enterとボタンの二重送信を防ぐ）
+  input.remove();
+  if (submitBtn) submitBtn.remove();
+  if (textSpan) {
+    // 実端末のecho動作に合わせて先行表示する（次のメッセージ受信時に上書きされる）
+    textSpan.textContent = textSpan.textContent + value + "\n";
+  }
+
+  const encoded = new TextEncoder().encode(value);
+  const len = Math.min(encoded.length, INPUT_BUF_BYTES);
+  dataBytes.set(encoded.subarray(0, len));
+  Atomics.store(ctrl, 1, len);
+  Atomics.store(ctrl, 0, 1);
+  Atomics.notify(ctrl, 0);
+}
+
+/* ========================================================
+   実行（Pyodide, Web Worker経由）
+   ======================================================== */
+// PyodideのCodeRunner内部フレーム（_pyodide/_base.py等）をトレースバックから取り除き、
+// 「python <ファイル名>.py」を実行した時に近い表示にする。
+function cleanTraceback(text, filename) {
+  if (!text.startsWith("Traceback (most recent call last):")) return text;
+  const marker = `File "${filename}"`;
+  const idx = text.indexOf(marker);
+  if (idx === -1) return text;
+  return "Traceback (most recent call last):\n  " + text.slice(idx);
+}
+
+// 実行のたびに増やす世代番号。強制再実行で古くなった exec() が、後から画面を書き換えないようにする。
+let runSeq = 0;
+
+async function exec() {
+  // 起動失敗が残っていたら、実行のたびに準備をやり直す（再読み込みせずに復帰できるように）。
+  if (pyBootError) restartPyBoot();
+  // 実行中（input()待ちを含む）でもいつでも押せる。Pythonが走っている最中なら強制終了して最初から再実行する。
+  // まだ準備中・競合確認中でPythonが走っていない場合は、前の呼び出しを無効にして引き継ぐだけでよい。
+  if (execRunning && resolveRun) await abortRunningPy();
+  const mySeq = ++runSeq;
+  execRunning = true;
+
+  const resultArea = document.getElementById("result-area");
+
+  try {
+    // Pyodideの準備がまだなら、読み込み中画面を出して完了を待ってから実行する。
+    if (!pyodideReady) {
+      document.getElementById("pyodide-loading").style.display = "flex";
+      try {
+        await pyBootPromise;
+      } catch (e) {
+        document.getElementById("pyodide-loading").style.display = "none";
+        if (mySeq === runSeq) alert(pyBootError || "Pythonの準備に失敗しました。");
+        return;
+      }
+    }
+    if (mySeq !== runSeq) return;
+
+    // 他端末がこのファイルを自分の知らない間に更新していないか確認する。
+    // 更新されていれば、再読み込みするかどうかをここで確認する（読み込んだ場合は
+    // 以降の実行はその最新内容で行う＝「実行ボタンを押した端末で実際に実行する」）。
+    await checkRemoteConflict();
+    if (mySeq !== runSeq) return;
+
+    const code = getSourceCode();
+    dataSave();
+
+    resultArea.innerHTML = '<pre class="py-stdout">実行中...</pre>';
+
+    const pyFilename = (jsfile || "main") + ".py";
+
+    const res = await runPy(code, pyFilename);
+    if (res.aborted || mySeq !== runSeq) return; // 強制再実行で置き換えられた
+    const { stdout, stderr: rawStderr, imgData } = res;
+    const stderr = cleanTraceback(rawStderr || "", pyFilename);
+
+    let html = "";
+
+    if (stdout) {
+      html += `<pre class="py-stdout">${escapeHtml(stdout)}</pre>`;
+    }
+    if (stderr) {
+      html += `<pre class="py-error">${escapeHtml(stderr)}</pre>`;
+    }
+    if (imgData) {
+      html += `<img class="py-plot" src="data:image/png;base64,${imgData}" alt="グラフ">`;
+    }
+    if (!html) {
+      html = '<pre class="py-stdout">（出力なし）</pre>';
+    }
+
+    resultArea.innerHTML = html;
+  } catch (e) {
+    // ここには来ない想定（runPyはWorker側でエラーも"result"としてpostMessageする）
+    resultArea.innerHTML = `<pre class="py-error">${escapeHtml(e.message || String(e))}</pre>`;
+  } finally {
+    if (mySeq === runSeq) execRunning = false;
+  }
+}
+
+
+/* ========================================================
+   静的版専用: ファイル管理・保存（localStorageだけ）・.pyのダウンロード/読み込み
+   ======================================================== */
+// localStorageはオリジン単位（GitHub Pagesでは https://ユーザー名.github.io 全体）で共有され、パスでは
+// 分離されない。同じオリジンの別のページ（別リポジトリのPages等）と混ざらないよう、キーにディレクトリパスを含める。
+const STORAGE_NAMESPACE = location.pathname.replace(/[^/]*$/, "");
+const FILES_STORAGE_KEY = `JSPython_static_files:${STORAGE_NAMESPACE}`;
+const collator = new Intl.Collator("ja", { numeric: true });
+const MAX_LOCAL_FILE_BYTES = 1000000; // 読み込む .py の大きさの上限（1MB）
+
+// localStorageが使えない環境（プライベートモード・容量超過など）では、ページを開いている間だけ
+// メモリ上に保持する（閉じると消える）。その場合は保存エラーを表示して、ダウンロードを促す。
+let memStore = {};
+let storageOk = true;
+function loadFilesStore(){
+  try {
+    const raw = localStorage.getItem(FILES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    storageOk = true;
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch(e) {
+    storageOk = false;
+    return memStore;
+  }
+}
+function saveFilesStore(store){
+  memStore = store;
+  try {
+    localStorage.setItem(FILES_STORAGE_KEY, JSON.stringify(store));
+    storageOk = true;
+  } catch(e) {
+    storageOk = false;
+    throw e;
+  }
+}
+// 別のタブが別のファイルを保存していても上書きして消さないよう、変更するファイルだけを、
+// その都度最新のストアを読み直してから書き戻す。
+function getEntry(name){
+  if(name === null || name === undefined) return null;
+  return loadFilesStore()[name] ?? null;
+}
+function putEntry(name, entry){
+  const store = loadFilesStore();
+  store[name] = entry;
+  saveFilesStore(store);
+}
+function removeEntry(name){
+  const store = loadFilesStore();
+  delete store[name];
+  saveFilesStore(store);
+}
+function listFileNames(){
+  return Object.keys(loadFilesStore()).sort(collator.compare);
+}
+
+const SAMPLE_CODE = [
+  "print('Hello world')",
+  "#print('こんにちは')",
+  "print(2*3+4)",
+  "x = 2",
+  "print(x)",
+  "y = 3",
+  "print(x + y)",
+  "a = input('名前')",
+  "b = a + 'さん'",
+  "print(b)",
+  "",
+].join("\n");
+
+function ensureInitialFiles(){
+  if(listFileNames().length > 0) return;
+  try {
+    putEntry("練習1", { data: SAMPLE_CODE, lastupdate: 0 });
+    putEntry("練習2", { data: "", lastupdate: 0 });
+  } catch(e) { /* 保存できなくても、メモリ上には入っている */ }
+}
+
+// ファイル名として使えるかを確認して、使える名前（末尾の .py を除いたもの）を返す。使えなければ null。
+// .py としてダウンロードするため、OSで使えない文字などを除く。URL（?名前）にも使うので # & = % + も除く。
+function normalizeFileName(raw){
+  let name = (raw ?? "").trim();
+  if(name.toLowerCase().endsWith(".py")) name = name.slice(0, -3).trim();
+  if(name === "" || name.length > 50 || name.startsWith(".")) return null;
+  if(/[\\/:*?"<>|#&=%+\u0000-\u001f]/.test(name)) return null;
+  return name;
+}
+const INVALID_NAME_MESSAGE =
+  "ファイル名に使えない文字が含まれているか、長すぎます（50文字まで）。\n" +
+  "次の文字は使えません: \\ / : * ? \" < > | # & = % +";
+
+/* ---------- 保存 ---------- */
+function showSaveError(message){
+  const el = document.getElementById("save-error");
+  if(!el) return;
+  if(message === null){
+    el.textContent = "";
+    el.classList.remove("show");
+  } else {
+    el.textContent = `⚠ ${message}`;
+    el.classList.add("show");
+  }
+}
+
+// 動的版の exec() からも呼ばれる（「保存＆実行」で保存してから実行する）。
+function dataSave(){
+  clearTimeout(autosaveTimer);
+  try {
+    putEntry(jsfile, { data: getSourceCode(), lastupdate: Date.now() });
+    is_edit = false;
+    setSaveIndicator("saved");
+    showSaveError(null);
+  } catch(e) {
+    console.error(e);
+    setSaveIndicator("error");
+    showSaveError("このブラウザ内に保存できません。「.pyをダウンロード」ボタンで手元に保存してください。");
+  }
+}
+
+// 編集のたびに少し待ってから自動で保存する（保存先がブラウザ内なので、通信は発生しない）。
+let autosaveTimer = null;
+function onDocChanged(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => { if(is_edit) dataSave(); }, 700);
+}
+window.addEventListener("pagehide", () => { if(is_edit) dataSave(); });
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "hidden" && is_edit) dataSave();
+});
+// ブラウザ内に保存できていない時だけ、離脱前に確認を出す（保存できている時は自動保存済み）。
+window.addEventListener("beforeunload", (e) => {
+  if(is_edit && !storageOk){ e.preventDefault(); e.returnValue = ""; }
+});
+
+/* ---------- ファイルの切り替え・作成・削除 ---------- */
+const fileSelectorEl = document.getElementById("fileSelector");
+
+function refreshFileList(){
+  fileSelectorEl.replaceChildren();
+  for(const name of listFileNames()){
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = displayFilename(name);
+    fileSelectorEl.appendChild(option);
+  }
+  fileSelectorEl.value = jsfile;
+}
+
+function loadFileIntoEditor(name){
+  const entry = getEntry(name);
+  jsfile = name;
+  setSourceCode(entry ? entry.data : "");
+  is_edit = false;
+  setSaveIndicator(storageOk ? "loaded" : "error");
+  clearTimeout(autosaveTimer);
+  history.replaceState(null, "", location.pathname + "?" + encodeURIComponent(name));
+  document.title = `${displayFilename(name)} | JS-Python Editor（静的版）`;
+  refreshFileList();
+}
+
+function switchFile(name){
+  if(name === jsfile) return;
+  if(is_edit) dataSave();
+  loadFileIntoEditor(name);
+  document.getElementById("result-area").innerHTML = '<pre class="py-stdout">（まだ実行されていません）</pre>';
+}
+fileSelectorEl.addEventListener("change", function(){ switchFile(this.value); });
+
+function createNewFile(){
+  const input = prompt("新規に作成するファイル名を入力（.py は付けなくてOK）", "");
+  if(input === null || input.trim() === "") return;
+  const name = normalizeFileName(input);
+  if(name === null){ alert(INVALID_NAME_MESSAGE); return; }
+  if(getEntry(name) !== null){ switchFile(name); return; } // 既にあれば、そのファイルを開く
+  if(is_edit) dataSave();
+  try { putEntry(name, { data: "", lastupdate: Date.now() }); }
+  catch(e){ showSaveError("このブラウザ内に保存できません。"); }
+  loadFileIntoEditor(name);
+  document.getElementById("result-area").innerHTML = '<pre class="py-stdout">（まだ実行されていません）</pre>';
+}
+
+function deleteCurrentFile(){
+  const message =
+    `「${displayFilename(jsfile)}」を削除します。よろしいですか？\n` +
+    "（元に戻せません。必要なら、先に「.pyをダウンロード」してください）";
+  if(!confirm(message)) return;
+  clearTimeout(autosaveTimer);
+  is_edit = false;
+  try { removeEntry(jsfile); } catch(e){ showSaveError("このブラウザ内の保存を更新できません。"); }
+  let names = listFileNames();
+  if(names.length === 0){
+    try { putEntry("練習1", { data: "", lastupdate: Date.now() }); } catch(e) { /* メモリ上のみ */ }
+    names = listFileNames();
+  }
+  loadFileIntoEditor(names[0] ?? "練習1");
+  document.getElementById("result-area").innerHTML = '<pre class="py-stdout">（まだ実行されていません）</pre>';
+}
+
+/* ---------- .py のダウンロード・読み込み ---------- */
+// ブラウザからパソコンへ、いま開いているファイルを .py としてダウンロードする。
+function downloadPy(){
+  dataSave(); // 先にブラウザ内へ保存してから書き出す
+  const blob = new Blob([getSourceCode()], { type: "text/x-python;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = displayFilename(jsfile);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openLocalFile(){
+  document.getElementById("py-file-input").click();
+}
+document.getElementById("py-file-input").addEventListener("change", async function(ev){
+  const files = Array.from(ev.target.files || []);
+  ev.target.value = ""; // 同じファイルをもう一度選べるようにする
+  if(is_edit) dataSave(); // 上書きしてしまう前に、いまの編集内容を保存しておく
+  let lastLoaded = null;
+  for(const file of files){
+    const name = normalizeFileName(file.name);
+    if(name === null){ alert(`「${file.name}」は、ファイル名が使えないため読み込めません。\n${INVALID_NAME_MESSAGE}`); continue; }
+    if(file.size > MAX_LOCAL_FILE_BYTES){ alert(`「${file.name}」は大きすぎるため読み込めません（1MBまで）。`); continue; }
+    if(getEntry(name) !== null && !confirm(`「${displayFilename(name)}」は既にあります。上書きしますか？`)) continue;
+    let text;
+    try { text = (await file.text()).replace(/\r\n?/g, "\n"); }
+    catch(e){ alert(`「${file.name}」を読み込めませんでした。`); continue; }
+    try { putEntry(name, { data: text, lastupdate: Date.now() }); lastLoaded = name; }
+    catch(e){ showSaveError("このブラウザ内に保存できません。"); }
+  }
+  if(lastLoaded !== null){
+    loadFileIntoEditor(lastLoaded);
+    document.getElementById("result-area").innerHTML = '<pre class="py-stdout">（まだ実行されていません）</pre>';
+  }
+});
+
+/* ========================================================
+   起動
+   ======================================================== */
+ensureInitialFiles();
+{
+  const names = listFileNames();
+  let start = jsfile ?? (names.includes("練習1") ? "練習1" : names[0]);
+  if(getEntry(start) === null){
+    // ?名前 で指定されたファイルがまだ無い時は、使える名前なら新規作成する
+    const name = normalizeFileName(start);
+    if(name !== null){
+      try { putEntry(name, { data: "", lastupdate: Date.now() }); } catch(e) { /* メモリ上のみ */ }
+      start = name;
+    } else {
+      start = names[0];
+    }
+  }
+  loadFileIntoEditor(start);
+}
+if(!storageOk){
+  showSaveError("このブラウザではブラウザ内に保存できません（プライベートモード等）。「.pyをダウンロード」ボタンで手元に保存してください。");
+}
+
+// 一度だけ再読み込みしても分離（SharedArrayBuffer）が有効にならない環境では、input()が使えないことを知らせる。
+setTimeout(() => {
+  if(!window.crossOriginIsolated){
+    document.getElementById("status-note").textContent =
+      "⚠ この環境では input() を使えません（それ以外は実行できます）";
+  }
+}, 2500);
+
+// Ctrl+S / Cmd+S で保存＆実行
+window.addEventListener("keydown", function(e) {
+  if ((e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    exec();
+  }
+});
+
+window.exec = exec;
+window.createNewFile = createNewFile;
+window.deleteCurrentFile = deleteCurrentFile;
+window.downloadPy = downloadPy;
+window.openLocalFile = openLocalFile;
+window.cmUndo = cmUndo;
+window.cmRedo = cmRedo;
+window.cmIndent = cmIndent;
+window.cmOutdent = cmOutdent;
+window.cmInsertSingleQuote = cmInsertSingleQuote;
+window.cmInsertDoubleQuote = cmInsertDoubleQuote;
+window.cmInsertText = cmInsertText;
+</script>
+</body>
+</html>
