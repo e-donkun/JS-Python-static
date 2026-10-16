@@ -4,13 +4,13 @@
 
   このファイルは tools/build_static.py が static-src/index.template.html から自動生成したものです。
   直接編集しないでください（編集する場合は、動的版 index.php の共通部分か static-src/ を直す）。
-  動的版（index.php）ベース: Ver.0.5.0048
+  動的版（index.php）ベース: Ver.0.5.0049
 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>JS-Python Editor（静的版） | 情報Ⅰ Python</title>
+  <title>JS-Python Editor | 情報Ⅰ Python</title>
 
   <script>
   // GitHub Pages等ではCOOP/COEPヘッダを設定できないため、Service Workerでヘッダを付けて
@@ -455,7 +455,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    #status-user { cursor: default; }
   </style>
 </head>
 
@@ -484,12 +483,12 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 640 640" onclick="createNewFile()" style="cursor:pointer;">
         <path d="M128 64C92.7 64 64 92.7 64 128L64 512C64 547.3 92.7 576 128 576L308 576C285.3 544.5 272 505.8 272 464C272 363.4 349.4 280.8 448 272.7L448 234.6C448 217.6 441.3 201.3 429.3 189.3L322.7 82.7C310.7 70.7 294.5 64 277.5 64L128 64zM389.5 240L296 240C282.7 240 272 229.3 272 216L272 122.5L389.5 240zM464 608C543.5 608 608 543.5 608 464C608 384.5 543.5 320 464 320C384.5 320 320 384.5 320 464C320 543.5 384.5 608 464 608zM480 400L480 448L528 448C536.8 448 544 455.2 544 464C544 472.8 536.8 480 528 480L480 480L480 528C480 536.8 472.8 544 464 544C455.2 544 448 536.8 448 528L448 480L400 480C391.2 480 384 472.8 384 464C384 455.2 391.2 448 400 448L448 448L448 400C448 391.2 455.2 384 464 384C472.8 384 480 391.2 480 400z"/>
       </svg>
-      <button class="icon-btn" type="button" onclick="downloadPy()" title="このファイルを .py としてダウンロード" aria-label=".pyをダウンロード">
+      <button class="icon-btn" type="button" onclick="downloadPy()" title="このファイルをダウンロード" aria-label="ファイルをダウンロード">
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 4v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/>
         </svg>
       </button>
-      <button class="icon-btn" type="button" onclick="openLocalFile()" title="パソコンの .py ファイルを読み込む" aria-label=".pyを読み込む">
+      <button class="icon-btn" type="button" onclick="openLocalFile()" title="パソコンのファイルを読み込む" aria-label="ファイルを読み込む">
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3.5 7.5V18a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5V9.5A1.5 1.5 0 0 0 19 8h-7l-2-2.5H5A1.5 1.5 0 0 0 3.5 7z"/>
           <path d="M12 17v-5"/><path d="M9.5 14.5 12 12l2.5 2.5"/>
@@ -551,12 +550,11 @@
   <footer class="statusbar" role="contentinfo" aria-label="ステータス">
     <div class="status-left">
       <span id='loadstatus'>●</span>
-      <span id="status-user">ブラウザ内に保存（localStorage）</span>
       <span id="save-error"></span>
       <span id="status-note"></span>
     </div>
     <div class="status-right">
-      <span id="program-version"><span class="app-name">JS-Python Editor 静的版 </span>Ver.0.5.0048</span>
+      <span id="program-version"><span class="app-name">JS-Python Editor </span>Ver.0.5.0049</span>
     </div>
   </footer>
 
@@ -1324,7 +1322,7 @@ function dataSave(){
   } catch(e) {
     console.error(e);
     setSaveIndicator("error");
-    showSaveError("このブラウザ内に保存できません。「.pyをダウンロード」ボタンで手元に保存してください。");
+    showSaveError("このブラウザ内に保存できません。ダウンロードボタンで手元に保存してください。");
   }
 }
 
@@ -1365,7 +1363,7 @@ function loadFileIntoEditor(name){
   setSaveIndicator(storageOk ? "loaded" : "error");
   clearTimeout(autosaveTimer);
   history.replaceState(null, "", location.pathname + "?" + encodeURIComponent(name));
-  document.title = `${displayFilename(name)} | JS-Python Editor（静的版）`;
+  document.title = `${displayFilename(name)} | JS-Python Editor`;
   refreshFileList();
 }
 
@@ -1378,7 +1376,7 @@ function switchFile(name){
 fileSelectorEl.addEventListener("change", function(){ switchFile(this.value); });
 
 function createNewFile(){
-  const input = prompt("新規に作成するファイル名を入力（.py は付けなくてOK）", "");
+  const input = prompt("新規に作成するファイル名を入力", "");
   if(input === null || input.trim() === "") return;
   const name = normalizeFileName(input);
   if(name === null){ alert(INVALID_NAME_MESSAGE); return; }
@@ -1393,7 +1391,7 @@ function createNewFile(){
 function deleteCurrentFile(){
   const message =
     `「${displayFilename(jsfile)}」を削除します。よろしいですか？\n` +
-    "（元に戻せません。必要なら、先に「.pyをダウンロード」してください）";
+    "（元に戻せません。必要なら、先にダウンロードしてください）";
   if(!confirm(message)) return;
   clearTimeout(autosaveTimer);
   is_edit = false;
@@ -1467,7 +1465,7 @@ ensureInitialFiles();
   loadFileIntoEditor(start);
 }
 if(!storageOk){
-  showSaveError("このブラウザではブラウザ内に保存できません（プライベートモード等）。「.pyをダウンロード」ボタンで手元に保存してください。");
+  showSaveError("このブラウザではブラウザ内に保存できません（プライベートモード等）。ダウンロードボタンで手元に保存してください。");
 }
 
 // 一度だけ再読み込みしても分離（SharedArrayBuffer）が有効にならない環境では、input()が使えないことを知らせる。
